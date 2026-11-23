@@ -29,17 +29,13 @@ OperationMode currentMode = DEACTIVE_MODE;
 int bluetooth_channels[] = {32, 34, 46, 48, 50, 52, 0, 1, 2, 4, 6, 8, 22, 24, 26, 28, 30, 74, 76, 78, 80};
 int ble_channels[] = {2, 26, 80};
 
-const byte BLE_channels[] = {2, 26, 80}; 
 byte channelGroup1[] = {2, 5, 8, 11};    
 byte channelGroup2[] = {26, 29, 32, 35}; 
 byte channelGroup3[] = {80, 83, 86, 89}; 
 
 volatile bool modeChangeRequested = false;
 
-unsigned long lastJammingTime = 0;
-const unsigned long jammingInterval = 10;
-
-unsigned long lastButtonPressTime = 0;
+volatile unsigned long lastButtonPressTime = 0;
 const unsigned long debounceDelay = 500;
 
 void IRAM_ATTR handleButtonPress() {
@@ -51,18 +47,19 @@ void IRAM_ATTR handleButtonPress() {
 }
 
 void configureRadio(RF24 &radio, const byte* channels, size_t size) {
+  if (size == 0) {
+    return;
+  }
+
   radio.setAutoAck(false);
   radio.stopListening();
   radio.setRetries(0, 0);
   radio.setPALevel(RF24_PA_MAX, true);
   radio.setDataRate(RF24_2MBPS);
   radio.setCRCLength(RF24_CRC_DISABLED);
-  radio.printPrettyDetails();
 
-  for (size_t i = 0; i < size; i++) {
-    radio.setChannel(channels[i]);
-    radio.startConstCarrier(RF24_PA_MAX, channels[i]);
-  }
+  radio.setChannel(channels[0]);
+  radio.startConstCarrier(RF24_PA_MAX, channels[0]);
 }
 
 void initializeRadiosMultiMode() {
@@ -78,23 +75,17 @@ void initializeRadiosMultiMode() {
 }
 
 void initializeRadios() {
-  if (currentMode == !DEACTIVE_MODE) {
+  if (currentMode != DEACTIVE_MODE) {
     initializeRadiosMultiMode();
-  } else if (currentMode == DEACTIVE_MODE) {
+  } else {
+    radio1.begin();
+    radio2.begin();
+    radio3.begin();
     radio1.powerDown();
     radio2.powerDown();
     radio3.powerDown();
     delay(100);
   } 
-}
-
-void jammer(RF24 &radio, const byte* channels, size_t size) {
-  const char text[] = "xxxxxxxxxxxxxxxx";
-  for (size_t i = 0; i < size; i++) {
-    radio.setChannel(channels[i]);
-    radio.write(&text, sizeof(text));
-    //delayMicroseconds(20);
-  }
 }
 
 void updateOLED() {
@@ -119,9 +110,9 @@ void updateOLED() {
   u8g2.setCursor(70, 50);
   u8g2.print(radio2.isChipConnected() ? "Active" : "Inactive");
 
-  u8g2.setCursor(0, 64);
+  u8g2.setCursor(0, 62);
   u8g2.print("Radio 3: ");
-  u8g2.setCursor(70, 64);
+  u8g2.setCursor(70, 62);
   u8g2.print(radio3.isChipConnected() ? "Active" : "Inactive");
 
   u8g2.sendBuffer();
@@ -140,15 +131,28 @@ void blejammerSetup() {
   Serial.begin(115200);
 
   esp_bt_controller_deinit();
+  esp_wifi_disconnect();
   esp_wifi_stop();
   esp_wifi_deinit();
-  esp_wifi_disconnect();
+
+  modeChangeRequested = false;
 
   pinMode(MODE_BUTTON, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(MODE_BUTTON), handleButtonPress, FALLING);
 
   initializeRadios();
   updateOLED();
+}
+
+void blejammerStop() {
+  detachInterrupt(digitalPinToInterrupt(MODE_BUTTON));
+
+  modeChangeRequested = false;
+  currentMode = DEACTIVE_MODE;
+  radio1.powerDown();
+  radio2.powerDown();
+  radio3.powerDown();
+  setNeoPixelColour("0");
 }
 
 void blejammerLoop() {
@@ -168,4 +172,6 @@ void blejammerLoop() {
         radio2.setChannel(channel);
         radio3.setChannel(channel);
   }
+
+  delay(1); // beri kesempatan task lain berjalan (hindari watchdog)
 }

@@ -25,66 +25,6 @@ uint8_t values[N];
 #define CE  5
 #define CSN 17
 
-#define CHANNELS  64
-int CHannel[CHANNELS];
-
-
-byte getregister(byte r) {
-  byte c;
-
-  digitalWrite(CSN, LOW);
-  SPI.transfer(r & 0x1F);
-  c = SPI.transfer(0);
-  digitalWrite(CSN, HIGH);
-
-  return c;
-}
-
-void setregister(byte r, byte v) {
-  digitalWrite(CSN, LOW);
-  SPI.transfer((r & 0x1F) | 0x20);
-  SPI.transfer(v);
-  digitalWrite(CSN, HIGH);
-}
-
-void powerup(void) {
-  setregister(NRF24_CONFIG, getregister(NRF24_CONFIG) | 0x02);
-  delayMicroseconds(130);
-}
-
-void powerdown(void) {
-  setregister(NRF24_CONFIG, getregister(NRF24_CONFIG) & ~0x02);
-}
-
-void ENable(void) {
-  digitalWrite(CE, HIGH);
-}
-
-void DIsable(void) {
-  digitalWrite(CE, LOW);
-}
-
-void setrx(void) {
-  setregister(NRF24_CONFIG, getregister(NRF24_CONFIG) | 0x01);
-  ENable();
-  delayMicroseconds(100);
-}
-
-void ScanChannels(void) {
-  DIsable();
- // for (int j = 0; j < 10; j++) {
-    for (int i = 0; i < CHANNELS; i++) {
-      setNeoPixelColour("purple");
-      setregister(NRF24_RF_CH, (128 * i) / CHANNELS);
-      setrx();
-      delayMicroseconds(40);
-      DIsable();
-      if (getregister(NRF24_RPD) > 0) CHannel[i]++;
-    }
-    setNeoPixelColour("0");
- // }
-}
-
 
 void writeRegister(uint8_t reg, uint8_t value) {
     digitalWrite(CSN, LOW);
@@ -134,6 +74,7 @@ void analyzerSetup(){
     Serial.begin(115200);
     
     esp_bt_controller_deinit();
+    esp_wifi_disconnect();
     esp_wifi_stop();
     esp_wifi_deinit();
   
@@ -148,8 +89,6 @@ void analyzerSetup(){
     digitalWrite(CSN, HIGH);
     digitalWrite(CE, LOW);
 
-    DIsable();
-
     powerUP();
     writeRegister(NRF24_EN_AA, 0x00);
     writeRegister(NRF24_RF_SETUP, 0x0F);  
@@ -158,15 +97,15 @@ void analyzerSetup(){
 
 void analyzerLoop(){
 
-    ScanChannels();
-
     memset(values, 0, sizeof(values));
+
+    setNeoPixelColour("purple");
 
     int n = 50;
     while (n--) {
-        int i = N;
-        while (i--) {
-            setChannel(i);
+        for (int i = 0; i < N; ++i) {
+            // nRF24L01 hanya mendukung kanal 0..125.
+            setChannel((uint8_t)((125L * i) / (N - 1)));
             startListening();
             delayMicroseconds(128);
             stopListening();
@@ -176,23 +115,22 @@ void analyzerLoop(){
         }
     }
 
+    setNeoPixelColour("0");
+
     u8g2.clearBuffer();
-    int barWidth = SCREEN_WIDTH / N;
-    int x = 0;
+
     for (int i = 0; i < N; ++i) {
-        int v = 63 - values[i] * 3;
-        if (v < 0) {
-            v = 0;
-        }
-        u8g2.drawVLine(x, v - 10, 64 - v);
-        x += barWidth;
+        // values[i] maksimum 50; skala ke tinggi bar 0..62.
+        int bar = map(values[i], 0, 50, 0, 62);
+        if (bar < 0) bar = 0;
+        if (bar > 62) bar = 62;
+
+        // U8g2 drawVLine(x, y, height), digambar dari dasar layar ke atas.
+        u8g2.drawVLine(i, 63 - bar, bar + 1);
     }
 
     u8g2.setFont(u8g2_font_ncenB08_tr);
-    u8g2.setCursor(0, 64);
+    u8g2.setCursor(0, 62);
     u8g2.print("1...5...10...25..50...80...128");
     u8g2.sendBuffer();
-
-    //delay(50);  
-
 }

@@ -29,6 +29,14 @@ void wifiscanSetup() {
   
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
+  WiFi.scanDelete();
+
+  // Reset state agar hasil scan lama tidak tampil lagi.
+  currentIndex = 0;
+  listStartIndex = 0;
+  isDetailView = false;
+  isScanComplete = false;
+  lastButtonPress = 0;
   
   pinMode(BTN_PIN_UP, INPUT_PULLUP);
   pinMode(BTN_PIN_DOWN, INPUT_PULLUP);
@@ -56,7 +64,6 @@ void wifiscanSetup() {
   }
   
   scan_StartTime = millis();
-  isScanComplete = false;
 }
 
 void wifiscanLoop() {
@@ -67,6 +74,11 @@ void wifiscanLoop() {
     if (foundNetworks >= 0) {
       isScanComplete = true;
     }
+  }
+
+  // Jika scan gagal terus-menerus, berhenti menunggu dan tampilkan daftar kosong.
+  if (!isScanComplete && currentMillis - scan_StartTime >= scanTimeout) {
+    isScanComplete = true;
   }
 
   if (currentMillis - lastButtonPress > debounceTime) {
@@ -87,7 +99,9 @@ void wifiscanLoop() {
       }
       lastButtonPress = currentMillis;
     } else if (digitalRead(BTN_PIN_SELECT) == LOW) {
-      isDetailView = true;
+      if (WiFi.scanComplete() > 0) {
+        isDetailView = true;
+      }
       lastButtonPress = currentMillis;
     }
   }
@@ -118,6 +132,12 @@ void wifiscanLoop() {
   }
 
   if (isDetailView) {
+    if (currentIndex >= WiFi.scanComplete()) {
+      isDetailView = false;
+      lastButtonPress = currentMillis;
+      return;
+    }
+
     String networkName = WiFi.SSID(currentIndex);
     String networkBSSID = WiFi.BSSIDstr(currentIndex);
     int rssi = WiFi.RSSI(currentIndex);
@@ -145,4 +165,10 @@ void wifiscanLoop() {
       lastButtonPress = currentMillis;
     }
   }
+}
+
+void wifiscanStop() {
+  isDetailView = false;
+  WiFi.scanDelete();
+  setNeoPixelColour("0");
 }

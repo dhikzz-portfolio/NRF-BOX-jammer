@@ -27,10 +27,10 @@ RF24 radio_2(CE_PIN_2, CSN_PIN_2, 16000000);
 RF24 radio_3(CE_PIN_3, CSN_PIN_3, 16000000);
 
 enum OperationMode {WiFi_MODULE, VIDEO_TX_MODULE, RC_MODULE, BLE_MODULE, Bluetooth_MODULE, USB_WIRELESS_MODULE, ZIGBEE_MODULE, NRF24_MODULE};
-OperationMode current_Mode = WiFi_MODULE;
+volatile OperationMode current_Mode = WiFi_MODULE;
 
 enum Operation {DEACTIVE_MODE, ACTIVE_MODE };
-Operation current = DEACTIVE_MODE;
+volatile Operation current = DEACTIVE_MODE;
 
 
 // Channel groups
@@ -52,7 +52,10 @@ volatile bool ChangeRequested = false;
 volatile bool ChangeRequested1 = false;
 volatile bool ChangeRequested2 = false;
 
-unsigned long lastPressTime = 0;
+// Waktu debounce terpisah per tombol: satu tombol tidak menunda tombol lain.
+volatile unsigned long lastPressTime = 0;
+volatile unsigned long lastPressTime1 = 0;
+volatile unsigned long lastPressTime2 = 0;
 const unsigned long debounceDelay = 200;
 
 
@@ -66,37 +69,40 @@ void IRAM_ATTR handleButton() {
 
 void IRAM_ATTR handleButton1() {
   unsigned long currentTime = millis();
-  if (currentTime - lastPressTime > debounceDelay) {
+  if (currentTime - lastPressTime1 > debounceDelay) {
     ChangeRequested1 = true;
-    lastPressTime = currentTime;
+    lastPressTime1 = currentTime;
   }
 }
 
 void IRAM_ATTR handleButton2() {
   unsigned long currentTime = millis();
-  if (currentTime - lastPressTime > debounceDelay) {
+  if (currentTime - lastPressTime2 > debounceDelay) {
     if (current == DEACTIVE_MODE) {
       current = ACTIVE_MODE;  
     } else {
       current = DEACTIVE_MODE;  
     }
-    lastPressTime = currentTime;  
+    lastPressTime2 = currentTime;  
   }
 }
 
 void configure_Radio(RF24 &radio, const byte *channels, size_t size) {
+  if (size == 0) {
+    return;
+  }
+
   radio.setAutoAck(false);
   radio.stopListening();
   radio.setRetries(0, 0);
   radio.setPALevel(RF24_PA_MAX, true);
   radio.setDataRate(RF24_2MBPS);
   radio.setCRCLength(RF24_CRC_DISABLED);
-  radio.printPrettyDetails();
 
-  for (size_t i = 0; i < size; i++) {
-    radio.setChannel(channels[i]);
-    radio.startConstCarrier(RF24_PA_MAX, channels[i]);
-  }
+  // Carrier dimulai pada kanal pertama grup; blackoutLoop() yang melakukan
+  // hopping kanal selama mode aktif.
+  radio.setChannel(channels[0]);
+  radio.startConstCarrier(RF24_PA_MAX, channels[0]);
 }
 
 void initialize_MultiMode() {
@@ -115,6 +121,10 @@ void initialize_Radios() {
   if (current == ACTIVE_MODE) {
     initialize_MultiMode();
   } else if (current == DEACTIVE_MODE) {
+    // begin() dulu agar bus SPI dan pin CSN/CE sudah siap sebelum powerDown().
+    radio_1.begin();
+    radio_2.begin();
+    radio_3.begin();
     radio_1.powerDown();
     radio_2.powerDown();
     radio_3.powerDown();
@@ -192,13 +202,28 @@ void checkMode() {
   }
 }
 
+void setProtocolChannel(const byte *channels, size_t size) {
+  if (size == 0) {
+    return;
+  }
+  int randomIndex = random(0, size);
+  int channel = channels[randomIndex];
+  radio_1.setChannel(channel);
+  radio_2.setChannel(channel);
+  radio_3.setChannel(channel);
+}
+
 void blackoutSetup() {
   Serial.begin(115200);
 
   esp_bt_controller_deinit();
+  esp_wifi_disconnect();
   esp_wifi_stop();
   esp_wifi_deinit();
-  esp_wifi_disconnect();
+
+  ChangeRequested = false;
+  ChangeRequested1 = false;
+  ChangeRequested2 = false;
 
   pinMode(MODE_BUTTON, INPUT_PULLUP);
   pinMode(MODE_BUTTON1, INPUT_PULLUP);
@@ -209,6 +234,22 @@ void blackoutSetup() {
 
   initialize_Radios();
   update_OLED();
+}
+
+void blackoutStop() {
+  detachInterrupt(digitalPinToInterrupt(MODE_BUTTON));
+  detachInterrupt(digitalPinToInterrupt(MODE_BUTTON1));
+  detachInterrupt(digitalPinToInterrupt(MODE_BUTTON2));
+
+  ChangeRequested = false;
+  ChangeRequested1 = false;
+  ChangeRequested2 = false;
+
+  current = DEACTIVE_MODE;
+  radio_1.powerDown();
+  radio_2.powerDown();
+  radio_3.powerDown();
+  setNeoPixelColour("0");
 }
 
 void blackoutLoop() {
@@ -223,59 +264,29 @@ void blackoutLoop() {
   }
 
   if (current_Mode == BLE_MODULE) {
-        int randomIndex = random(0, sizeof(ble_channels) / sizeof(ble_channels[0]));
-        int channel = ble_channels[randomIndex];
-        radio_1.setChannel(channel);
-        radio_2.setChannel(channel);
-        radio_3.setChannel(channel);
-        
+        setProtocolChannel(ble_channels, sizeof(ble_channels));
+
   } else if (current_Mode == Bluetooth_MODULE) {
-        int randomIndex = random(0, sizeof(bluetooth_channels) / sizeof(bluetooth_channels[0]));
-        int channel = bluetooth_channels[randomIndex];
-        radio_1.setChannel(channel);
-        radio_2.setChannel(channel);
-        radio_3.setChannel(channel);
-        
+        setProtocolChannel(bluetooth_channels, sizeof(bluetooth_channels));
+
   }else if (current_Mode == WiFi_MODULE) {
-        int randomIndex = random(0, sizeof(WiFi_channels) / sizeof(WiFi_channels[0]));
-        int channel = WiFi_channels[randomIndex];
-        radio_1.setChannel(channel);
-        radio_2.setChannel(channel);
-        radio_3.setChannel(channel);
-        
+        setProtocolChannel(WiFi_channels, sizeof(WiFi_channels));
+
   }else if (current_Mode == USB_WIRELESS_MODULE) {
-        int randomIndex = random(0, sizeof(usbWireless_channels) / sizeof(usbWireless_channels[0]));
-        int channel = usbWireless_channels[randomIndex];
-        radio_1.setChannel(channel);
-        radio_2.setChannel(channel);
-        radio_3.setChannel(channel);
-        
+        setProtocolChannel(usbWireless_channels, sizeof(usbWireless_channels));
+
   }else if (current_Mode == VIDEO_TX_MODULE) {
-        int randomIndex = random(0, sizeof(videoTransmitter_channels) / sizeof(videoTransmitter_channels[0]));
-        int channel = videoTransmitter_channels[randomIndex];
-        radio_1.setChannel(channel);
-        radio_2.setChannel(channel);
-        radio_3.setChannel(channel);
-        
+        setProtocolChannel(videoTransmitter_channels, sizeof(videoTransmitter_channels));
+
   }else if (current_Mode == RC_MODULE) {
-        int randomIndex = random(0, sizeof(rc_channels) / sizeof(rc_channels[0]));
-        int channel = rc_channels[randomIndex];
-        radio_1.setChannel(channel);
-        radio_2.setChannel(channel);
-        radio_3.setChannel(channel);
-        
+        setProtocolChannel(rc_channels, sizeof(rc_channels));
+
   }else if (current_Mode == ZIGBEE_MODULE) {
-        int randomIndex = random(0, sizeof(zigbee_channels) / sizeof(zigbee_channels[0]));
-        int channel = zigbee_channels[randomIndex];
-        radio_1.setChannel(channel);
-        radio_2.setChannel(channel);
-        radio_3.setChannel(channel);     
-        
+        setProtocolChannel(zigbee_channels, sizeof(zigbee_channels));
+
   }else if (current_Mode == NRF24_MODULE) {
-        int randomIndex = random(0, sizeof(nrf24_channels) / sizeof(nrf24_channels[0]));
-        int channel = nrf24_channels[randomIndex];
-        radio_1.setChannel(channel);
-        radio_2.setChannel(channel);
-        radio_3.setChannel(channel);
+        setProtocolChannel(nrf24_channels, sizeof(nrf24_channels));
   } 
+
+  delay(1); // beri kesempatan task lain berjalan (hindari watchdog)
 }

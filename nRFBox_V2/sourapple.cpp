@@ -19,7 +19,7 @@ String lines[MAX_LINES];
 int currentLine = 0;
 int lineNumber = 1;
 
-uint32_t delayMilliseconds = 1000;
+
 
 void updatedisplay() {
   u8g2.clearBuffer();
@@ -94,7 +94,10 @@ void sourappleSetup() {
   esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9); //Not sure if this works with NimBLE
   esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN , ESP_PWR_LVL_P9);
 
-  BLEServer *pServer = BLEDevice::createServer();
+  BLEServer *pServer = BLEDevice::getServer();
+  if (pServer == NULL) {
+    pServer = BLEDevice::createServer();
+  }
   Advertising = pServer->getAdvertising();
 
   esp_bd_addr_t null_addr = {0xFE, 0xED, 0xC0, 0xFF, 0xEE, 0x69};
@@ -128,4 +131,11 @@ void sourappleLoop() {
     delay(40);
     displayAdvertisementData();
   
+}
+
+void sourappleStop() {
+  if (Advertising != NULL) {
+    Advertising->stop();
+  }
+  setNeoPixelColour("0");
 }

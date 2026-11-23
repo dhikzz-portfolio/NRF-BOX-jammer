@@ -15,5 +15,6 @@
 
 void sourappleSetup();
 void sourappleLoop();
+void sourappleStop();
 
 #endif

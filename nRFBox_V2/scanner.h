@@ -16,5 +16,6 @@
 
 void scannerSetup();
 void scannerLoop();
+void scannerSaveGraph();
 
 #endif

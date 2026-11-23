@@ -16,9 +16,6 @@ extern Adafruit_NeoPixel pixels;
 #define CHANNELS  64
 int channel[CHANNELS];
 
-int line;
-char grey[] = " .:-=+*aRW";
-
 #define _NRF24_CONFIG      0x00
 #define _NRF24_EN_AA       0x01
 #define _NRF24_RF_CH       0x05
@@ -28,9 +25,6 @@ char grey[] = " .:-=+*aRW";
 #define EEPROM_ADDRESS_SENSOR_ARRAY 2 
 
 byte sensorArray[129];
-
-unsigned long lastSaveTime = 0; 
-const unsigned long saveInterval = 5000; 
 
 byte getRegister(byte r) {
   byte c;
@@ -79,7 +73,8 @@ void scanChannels(void) {
   const int samplesPerChannel = 50; // Number of samples per channel to average
 
   for (int i = 0; i < CHANNELS; i++) {
-    setRegister(_NRF24_RF_CH, (128 * i) / CHANNELS);
+    // nRF24L01 hanya mendukung kanal 0..125, jadi petakan 64 bar ke rentang itu.
+    setRegister(_NRF24_RF_CH, (125 * i) / (CHANNELS - 1));
 
     for (int j = 0; j < samplesPerChannel; j++) {
       setRX();
@@ -104,13 +99,16 @@ void outputChannels(void) {
     }
   }
 
-  byte drawHeight = map(norm, 0, 64, 0, 64); 
+  // channel[] berisi persentase 0..100; skala ke tinggi grafik 0..63.
+  int drawHeight = map(norm, 0, 100, 0, 63);
+  if (drawHeight < 0) drawHeight = 0;
+  if (drawHeight > 63) drawHeight = 63;
   
   // Update sensorArray with the new value (shift left for right-to-left movement)
   for (byte count = 126; count > 0; count--) {
     sensorArray[count] = sensorArray[count - 1];
   }
-  sensorArray[0] = drawHeight;
+  sensorArray[0] = (byte)drawHeight;
 
   u8g2.clearBuffer();
 
@@ -127,10 +125,11 @@ void outputChannels(void) {
     u8g2.drawPixel(count, 63);
   }
 
+  setNeoPixelColour("purple");
+
   // Draw the graph moving right-to-left
   for (byte count = 0; count < 127; count++) {
     u8g2.drawLine(127 - count, 63, 127 - count, 63 - sensorArray[count]);
-    setNeoPixelColour("purple");
   }
   
   setNeoPixelColour("0");
@@ -145,16 +144,18 @@ void outputChannels(void) {
 }
 
 void loadPreviousGraph() {
-  EEPROM.begin(128); 
-  for (byte i = 0; i < 128; i++) {
+  EEPROM.begin(512); 
+  for (int i = 0; i < 128; i++) {
     sensorArray[i] = EEPROM.read(EEPROM_ADDRESS_SENSOR_ARRAY + i);
   }
   EEPROM.end(); 
 }
 
-void saveGraphToEEPROM() {
-  EEPROM.begin(128); 
-  for (byte i = 0; i < 128; i++) {
+// Dipanggil sekali saat keluar dari mode Scanner, bukan setiap 5 detik,
+// supaya umur flash tidak cepat habis.
+void scannerSaveGraph() {
+  EEPROM.begin(512); 
+  for (int i = 0; i < 128; i++) {
     EEPROM.write(EEPROM_ADDRESS_SENSOR_ARRAY + i, sensorArray[i]);
   }
   EEPROM.commit(); 
@@ -165,10 +166,11 @@ void scannerSetup() {
   Serial.begin(115200);
 
   esp_bt_controller_deinit();
+  esp_wifi_disconnect();
   esp_wifi_stop();
   esp_wifi_deinit();
   
-  for (byte count = 0; count <= 128; count++) {
+  for (int count = 0; count <= 128; count++) {
     sensorArray[count] = 0;
   }
 
@@ -192,10 +194,4 @@ void scannerSetup() {
 void scannerLoop() {
   scanChannels();
   outputChannels();
-
-  // Save the graph to EEPROM every 5 seconds
-  if (millis() - lastSaveTime > saveInterval) {
-    saveGraphToEEPROM();
-    lastSaveTime = millis();
-  }
 }

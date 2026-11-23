@@ -30,6 +30,11 @@ bool buttonSelectPressed = false;
 void toggleOption(int option) {
   if (option == 0) { 
     neoPixelActive = !neoPixelActive;
+    if (!neoPixelActive) {
+      // Matikan LED yang mungkin masih menyala dari mode sebelumnya.
+      pixels.clear();
+      pixels.show();
+    }
     EEPROM.write(EEPROM_ADDRESS_NEOPIXEL, neoPixelActive);
     EEPROM.commit();
     Serial.print("NeoPixel is now ");
@@ -37,7 +42,8 @@ void toggleOption(int option) {
   } else if (option == 1) { 
     uint8_t brightnessPercent = map(oledBrightness, 0, 255, 0, 100); // Map to 0-100
     brightnessPercent += 10; // Increment brightness by 10%
-    if (brightnessPercent > 100) brightnessPercent = 0; // Wrap around to 0
+    // Jangan pernah turun ke 0%: layar akan mati dan tidak bisa dikembalikan.
+    if (brightnessPercent > 100 || brightnessPercent < 10) brightnessPercent = 10;
     oledBrightness = map(brightnessPercent, 0, 100, 0, 255); // Map back to 0-255
 
     u8g2.setContrast(oledBrightness); // Apply the brightness
@@ -121,7 +127,7 @@ void settingSetup() {
   neoPixelActive = EEPROM.read(EEPROM_ADDRESS_NEOPIXEL);
   oledBrightness = EEPROM.read(EEPROM_ADDRESS_BRIGHTNESS);
   
-  if (oledBrightness > 255) oledBrightness = 128; // Ensure valid brightness
+  if (oledBrightness < 10) oledBrightness = 128; // Pulihkan dari nilai 0/terlalu redup
   u8g2.setContrast(oledBrightness);
 
   // Initialize buttons

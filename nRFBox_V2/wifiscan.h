@@ -12,5 +12,6 @@
 
 void wifiscanSetup();
 void wifiscanLoop();
+void wifiscanStop();
 
 #endif

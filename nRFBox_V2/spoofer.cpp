@@ -15,29 +15,12 @@ std::string devices_uuid = "00003082-0000-1000-9000-00805f9b34fb";
 const int deviceTypeNextPin = 27; 
 const int deviceTypePrevPin = 25; 
 const int advTypeNextPin = 33;    
-//const int advTypePrevPin = 27;    
 const int advControlPin = 26;     
 
-uint32_t delayMillisecond = 1000;
-unsigned long lastDebounceTimeNext = 0;
-unsigned long lastDebounceTimePrev = 0;
-unsigned long lastDebounceTimeAdvNext = 0;
-unsigned long lastDebounceTimeAdvPrev = 0;
-
-int lastButtonStateNext = LOW;
-int lastButtonStatePrev = LOW;
-int lastButtonStateAdvNext = LOW;
-int lastButtonStateAdvPrev = LOW;
-
-
-unsigned long lastDebounceTime = 0;
-unsigned long debounceDelay = 500; 
 
 bool isAdvertising = true; 
 
-int scanTime = 5;
 int deviceType = 1;
-int delaySeconds = 1;
 int advType = 1;
 int attack_state = 1;
 int device_choice = 0;
@@ -89,13 +72,12 @@ BLEAdvertisementData getAdvertismentData() {
   }
 
 
-  int adv_type_choice = random(3);
-  if (adv_type_choice == 0) {
-    pAdvertising->setAdvertisementType(ADV_TYPE_IND);
-  } else if (adv_type_choice == 1) {
-    pAdvertising->setAdvertisementType(ADV_TYPE_SCAN_IND);
-  } else {
-    pAdvertising->setAdvertisementType(ADV_TYPE_NONCONN_IND);
+  // advType sekarang benar-benar menentukan tipe advertising, sesuai UI.
+  switch (advType) {
+    case 1: pAdvertising->setAdvertisementType(ADV_TYPE_IND); break;
+    case 2: pAdvertising->setAdvertisementType(ADV_TYPE_SCAN_IND); break;
+    case 3: pAdvertising->setAdvertisementType(ADV_TYPE_NONCONN_IND); break;
+    default: pAdvertising->setAdvertisementType(ADV_TYPE_IND); break;
   }
 
   return oAdvertisementData;
@@ -128,7 +110,7 @@ void updateDisplay() {
       u8g2.drawStr(x, y, "[ Airpods Gen 3 ]");
       break;
     case 6:
-      u8g2.drawStr(x, y, "[ Airpods Gen 2 ]");
+      u8g2.drawStr(x, y, "[ Airpods Pro Gen 2 ]");
       break;
     case 7:
       u8g2.drawStr(x, y, "[ PowerBeats ]");
@@ -175,22 +157,16 @@ void updateDisplay() {
         u8g2.drawStr(60, 45, "IND");
         break;
     case 2:
-        u8g2.drawStr(60, 45, "DIRECT HIGH");
-        break;
-    case 3:
         u8g2.drawStr(60, 45, "SCAN");
         break;
-    case 4:
+    case 3:
         u8g2.drawStr(60, 45, "NONCONN");
-        break;
-    case 5:
-        u8g2.drawStr(60, 45, "DIRECT LOW");
         break;
   }
 
   u8g2.drawStr(0, 60, "Advertising:");
   u8g2.setCursor(80, 60);
-  u8g2.print(isAdvertising ? "Disable" : "Active");
+  u8g2.print(isAdvertising ? "Active" : "Disable");
 
   u8g2.sendBuffer(); 
 }
@@ -292,7 +268,7 @@ void Beats_Studio_Pro() {
 void Betas_Fit_Pro() {
   device_choice = 0;
   device_index = 15;
-
+  attack_state = 1;
 }
 
 void Beats_Studio_Buds_Plus() {
@@ -358,30 +334,30 @@ void setAdvertisingData() {
     default:
       Airpods();
       break;
-
-      updateDisplay();
   }
 }
 
 
 void handleButtonPress(int pin, void (*callback)()) {
-  int reading = digitalRead(pin);
+  static bool lastState[40] = {false};
+  static unsigned long lastPress[40] = {0};
+  const unsigned long debounceDelay = 250;
 
-  if (reading == LOW) {
-    unsigned long currentTime = millis();
-    delay(300);
-    updateDisplay();
+  int index = pin % 40;
+  bool pressed = digitalRead(pin) == LOW;
+  unsigned long now = millis();
 
-    if ((currentTime - lastDebounceTime) > debounceDelay) {
-      callback();
-      lastDebounceTime = currentTime;
-    }
+  if (pressed && !lastState[index] && (now - lastPress[index] > debounceDelay)) {
+    lastPress[index] = now;
+    callback();
   }
+
+  lastState[index] = pressed;
 }
 
 void changeDeviceTypeNext() {
   deviceType++;
-  if (deviceType > 26) deviceType = 1;
+  if (deviceType > 17) deviceType = 1;
   Serial.println("Device Type Next: " + String(deviceType));
   setAdvertisingData();
   updateDisplay();
@@ -389,7 +365,7 @@ void changeDeviceTypeNext() {
 
 void changeDeviceTypePrev() {
   deviceType--;
-  if (deviceType < 1) deviceType = 26;
+  if (deviceType < 1) deviceType = 17;
   Serial.println("Device Type Prev: " + String(deviceType));
   setAdvertisingData();
   updateDisplay();
@@ -397,7 +373,7 @@ void changeDeviceTypePrev() {
 
 void changeAdvTypeNext() {
   advType++;
-  if (advType > 5) advType = 1;
+  if (advType > 3) advType = 1;
   Serial.println("Advertising Type Next: " + String(advType));
   setAdvertisingData();
   updateDisplay();
@@ -405,7 +381,7 @@ void changeAdvTypeNext() {
 
 void changeAdvTypePrev() {
   advType--;
-  if (advType < 1) advType = 5;
+  if (advType < 1) advType = 3;
   Serial.println("Advertising Type Prev: " + String(advType));
   setAdvertisingData();
   updateDisplay();
@@ -447,19 +423,15 @@ void toggleAdvertising() {
       pAdvertising->setMaxPreferred(0x20);
 
       pAdvertising->start();
-      delay(delayMillisecond); // delay for delayMillisecond ms
-      pAdvertising->stop();
+
+      // Biarkan advertising tetap berjalan sampai pengguna mematikannya
+      // atau keluar mode (spooferStop()).
     }
 
     Serial.println("Advertising started.");
     updateDisplay();
     
-    if (digitalRead(advControlPin) == LOW) {
-      delay(50);  // Debounce delay
-      isAdvertising = !isAdvertising;
-      updateDisplay(); 
-      //break;  
-    }
+
   }
    //isAdvertising = !isAdvertising;
 }
@@ -475,8 +447,15 @@ void spooferSetup() {
 
   BLEDevice::init("AirPods 69");
   esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9);
+  isAdvertising = false;
   updateDisplay();
-  BLEServer *pServer = BLEDevice::createServer();
+
+  // Pakai server yang sudah ada supaya tidak membuat objek baru setiap
+  // kali mode dibuka (mencegah kebocoran memori).
+  BLEServer *pServer = BLEDevice::getServer();
+  if (pServer == NULL) {
+    pServer = BLEDevice::createServer();
+  }
   pAdvertising = pServer->getAdvertising();
 
   esp_bd_addr_t null_addr = {0xFE, 0xED, 0xC0, 0xFF, 0xEE, 0x69};
@@ -494,4 +473,12 @@ void spooferLoop() {
   handleButtonPress(advControlPin, toggleAdvertising); 
 
   delay(50); // Avoid overloading the CPU
+}
+
+void spooferStop() {
+  if (pAdvertising != NULL) {
+    pAdvertising->stop();
+  }
+  isAdvertising = false;
+  setNeoPixelColour("0");
 }

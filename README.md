@@ -8,7 +8,7 @@ Firmware ESP32 untuk **nRF-BOX V2.5**: alat uji keamanan nirkabel portabel denga
 
 ## Fitur
 
-Menu utama berisi 11 item:
+Menu utama berisi 11 item. Setiap mode berjalan terus-menerus sampai tombol **SELECT** ditekan lagi.
 
 - **Scanner** — grafik spektrum 2.4 GHz 64 kanal (riwayat disimpan di EEPROM)
 - **Analyzer** — analisis 128 kanal dengan grafik batang
@@ -20,7 +20,7 @@ Menu utama berisi 11 item:
 - **BLE Scan** — daftar perangkat BLE + detail (nama, MAC, RSSI)
 - **WiFi Scan** — daftar jaringan WiFi + detail (SSID, BSSID, RSSI, kanal)
 - **About** — kredit pembuat
-- **Setting** — aktif/nonaktif NeoPixel dan kecerahan OLED (tersimpan di EEPROM)
+- **Setting** — aktif/nonaktif NeoPixel dan kecerahan OLED 10–100% (tersimpan di EEPROM)
 
 ## Hardware ringkas
 
@@ -43,6 +43,8 @@ Menu utama berisi 11 item:
 3. Pilih **ChipType: ESP32**, **WorkMode: Develop**, **LoadMode: UART**.
 4. Tambahkan `3_nRFBox_v2.5.bin` pada alamat **`0x10000`**, pilih port COM, baud 115200, lalu **START**.
 5. Setelah `Download result: PASS`, tekan reset.
+
+> `3_nRFBox_v2.5.bin` adalah build lama tanpa perbaikan terbaru. Untuk versi dengan seluruh perbaikan, build dari source (Opsi B).
 
 ### Opsi B — Compile dari source (Arduino IDE)
 

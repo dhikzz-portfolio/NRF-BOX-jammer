@@ -12,5 +12,6 @@
 
 void blescanSetup();
 void blescanLoop();
+void blescanStop();
 
 #endif

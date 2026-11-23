@@ -33,6 +33,14 @@ void blescanSetup() {
   BLEDevice::init("");
   scan = BLEDevice::getScan();
   scan->setActiveScan(true);
+  scan->clearResults();
+
+  // Reset state agar hasil scan sebelumnya tidak tampil sebelum scan baru selesai.
+  selectedIndex = 0;
+  displayStartIndex = 0;
+  showDetails = false;
+  scanComplete = false;
+  lastDebounce = 0;
   
   pinMode(BUTTON_PIN_UP, INPUT_PULLUP);
   pinMode(BUTTON_PIN_DOWN, INPUT_PULLUP);
@@ -93,7 +101,10 @@ void blescanLoop() {
       }
       lastDebounce = currentMillis;
     } else if (digitalRead(BUTTON_PIN_SELECT) == LOW) {
-      showDetails = true;
+      // Jangan buka detail sebelum scan selesai dan ada hasilnya.
+      if (scanComplete && results.getCount() > 0) {
+        showDetails = true;
+      }
       lastDebounce = currentMillis;
     }
   }
@@ -122,6 +133,12 @@ void blescanLoop() {
   }
 
   if (showDetails) {
+    if (selectedIndex >= results.getCount()) {
+      showDetails = false;
+      lastDebounce = currentMillis;
+      return;
+    }
+
     BLEAdvertisedDevice device = results.getDevice(selectedIndex);
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x10_tr);
@@ -141,4 +158,13 @@ void blescanLoop() {
       lastDebounce = currentMillis;
     }
   }  
+}
+
+void blescanStop() {
+  if (scan != NULL) {
+    scan->stop();
+    scan->clearResults();
+  }
+  showDetails = false;
+  setNeoPixelColour("0");
 }

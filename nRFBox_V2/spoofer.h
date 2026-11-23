@@ -15,5 +15,6 @@
 
 void spooferSetup();
 void spooferLoop();
+void spooferStop();
 
 #endif

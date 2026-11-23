@@ -12,17 +12,19 @@ extern Adafruit_NeoPixel pixels;
 void neopixelSetup() {
   EEPROM.begin(512); 
   neoPixelActive = EEPROM.read(0);
-  
- if (neoPixelActive) {
+
+  // begin() selalu dipanggil supaya pin/buffer LED siap. Jika fitur
+  // dinonaktifkan, setNeoPixelColour() tidak akan menggerakkannya.
   pixels.begin();
   pixels.clear();
-  //pixels.show();
-  }
+  pixels.show();
 }
 
-void neopixelLoop();
-
 void setNeoPixelColour(const std::string& colour) {
+  if (!neoPixelActive) {
+    return;
+  }
+
   uint32_t colorValue = 0; 
 
   if (colour == "red") {

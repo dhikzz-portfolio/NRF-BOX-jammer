@@ -175,7 +175,7 @@ Saat boot, firmware:
 
 1. Menyalakan NeoPixel (jika diaktifkan di EEPROM).
 2. Mengonfigurasi tiga radio: auto-ack off, CRC off, `PA_MAX`, 2 Mbps.
-3. Membaca kecerahan OLED dari EEPROM alamat `1`, lalu menampilkan splash **"nRF-BOX / Yellow Purple / v2.5.0"** selama ±3 detik.
+3. Membaca kecerahan OLED dari EEPROM alamat `1`. Nilai yang tidak wajar (di bawah 10) otomatis dipulihkan ke 128 agar layar tidak mati permanen, lalu menampilkan splash **"nRF-BOX / Yellow Purple / v2.5.0"** selama ±3 detik.
 4. Menampilkan logo bitmap `logo_cifer` selama 250 ms.
 5. Mengaktifkan tiga tombol menu (`INPUT_PULLUP`).
 6. Masuk ke `loop()` yang merender menu dan menunggu input.
@@ -200,22 +200,20 @@ Saat boot, firmware:
 
 Menu digambar manual di buffer U8g2: ikon 16×16 di kiri, teks di tengah, kotak seleksi (`bitmap_item_sel_outline`) di item aktif, dan scrollbar di sisi kanan (`drawBox(125, 64/11 * item_selected, 3, 64/11)`).
 
-Pola pemanggilan modul di `loop()` berbentuk:
+Mode dijalankan dengan state machine sederhana: setelah item dipilih, `setup` dipanggil **sekali**, lalu `loop` modul dijalankan terus-menerus sampai tombol SELECT (GPIO32) ditekan lagi.
 
 ```cpp
-if (item_selected == N) {
-  <modul>Setup();
-  while (item_selected == N) {
-    if (digitalRead(BUTTON_SELECT_PIN) == HIGH) {
-      if (callAbout) { <modul>Loop(); callAbout = false; }
-      else break;
-      /* tunggu tombol dilepas */
-    }
+static void runMode(void (*setupFn)(), void (*loopFn)()) {
+  setupFn();
+  waitForSelectRelease();
+  while (!selectIsHeld()) {
+    loopFn();
   }
+  waitForSelectRelease();
 }
 ```
 
-Detail perilaku ini dijelaskan pada bagian 9 (Catatan implementasi).
+Setelah mode berakhir, entry point memanggil fungsi pembersih khusus modul (mis. `jammerStop()`, `blescanStop()`, `scannerSaveGraph()`) agar radio/BLE berhenti, LED mati, dan sumber daya tidak tertinggal. Baru setelah itu menu digambar kembali.
 
 ### 5.3 Lapisan perangkat keras bersama
 
@@ -233,24 +231,24 @@ Detail perilaku ini dijelaskan pada bagian 9 (Catatan implementasi).
 
 - Memindai **64 kanal** pada pita 2.4 GHz dengan mengakses register nRF24 langsung via SPI (tanpa library RF24): `CONFIG (0x00)`, `EN_AA (0x01)`, `RF_CH (0x05)`, `RF_SETUP (0x06)`, `RPD (0x09)`.
 - Untuk tiap kanal, dilakukan **50 sampel**: radio di-`RX`, tunggu 100 µs, matikan, baca bit **RPD** (Received Power Detector). Nilai diakumulasi lalu dikonversi ke persen: `(total * 100) / samplesPerChannel`.
-- Nilai maksimum seluruh kanal dinormalisasi ke tinggi grafik 0–64 px.
+- Nilai persentase (0–100) dari kanal terkuat dinormalisasi ke tinggi grafik 0–63 px.
+- Ke-64 bar dipetakan merata ke kanal RF 0–125 (batas valid nRF24L01).
 - Grafik bergerak dari kanan ke kiri dengan buffer `sensorArray[129]`; nilai terbaru masuk di indeks 0.
-- Grafik **disimpan ke EEPROM** setiap 5 detik (alamat 2–129) sehingga riwayat tetap ada setelah reboot.
+- Grafik **disimpan ke EEPROM sekali saat keluar mode** (alamat 2–129), bukan setiap 5 detik, sehingga umur flash lebih panjang.
 - NeoPixel berwarna ungu selama pemindaian, mati saat selesai.
 - Konfigurasi SPI: mode 0, 16 MHz, MSB-first. Register `RF_SETUP = 0x0F` (gain maksimum, 2 Mbps).
 
 ### 6.2 Analyzer — `analyzer.cpp`
 
-- Memindai **128 kanal** (`values[128]`), 50 siklus per frame.
-- Tiap kanal: set `RF_CH`, `CE` HIGH 128 µs, `CE` LOW, lalu baca RPD. Setiap deteksi menambah counter kanal.
-- Digambar sebagai garis vertikal per kanal (`drawVLine`), tinggi = `63 - value*3`, dengan label sumbu `"1...5...10...25..50...80...128"`.
+- Memindai **128 bar** (`values[128]`), 50 siklus per frame; tiap bar dipetakan ke kanal RF 0–125.
+- Tiap bar: set `RF_CH`, `CE` HIGH 128 µs, `CE` LOW, lalu baca RPD. Setiap deteksi menambah counter bar.
+- Digambar sebagai garis vertikal per kanal (`drawVLine`, argumen ketiga adalah **tinggi** bar) dari dasar layar ke atas; nilai 0–50 sampel dipetakan ke tinggi 0–62 px. Label sumbu `"1...5...10...25..50...80...128"` digambar di y=62.
 - Berbeda dari Scanner, analyzer tidak menyimpan data dan tidak memakai library RF24.
 
 ### 6.3 WLAN Jammer — `jammer.cpp`
 
 - Tiga radio diinisialisasi lewat library RF24: `openWritingPipe(0xFFFFFFFFFF)`, auto-ack off, retry 0, `PA_MAX`, 2 Mbps, CRC off.
-- Metode yang **aktif di kode** adalah `methode = 1` (nilai hardcoded): mengirim pola byte `0xAA, 0x55, ...` (16 byte) pada rentang kanal `(channels*5)+1` sampai `(channels*5)+22`, sehingga satu "kanal WiFi" mencakup ±22 kanal RF.
-- Metode 2 dan 3 ada di kode tetapi tidak dapat dipilih dari UI.
+- Jammer mengirim pola byte `0xAA, 0x55, ...` (16 byte) pada rentang kanal `(channels*5)+1` sampai `(channels*5)+22`, sehingga satu "kanal WiFi" mencakup ±22 kanal RF. Kode metode eksperimental yang tidak terpakai sudah dihapus.
 - Kontrol:
   - **BT1 (GPIO33)** — ganti kanal 1–14 (dengan debounce 200 ms).
   - **BT2 (GPIO26)** — mulai/berhenti jamming.
@@ -258,8 +256,7 @@ Detail perilaku ini dijelaskan pada bagian 9 (Catatan implementasi).
   - **BT4 (GPIO25)** — siklus daya: MIN → LOW → HIGH → MAX.
 - Semua tombol memakai interupsi `FALLING` + debounce di `millis()`.
 - OLED menampilkan kanal, PA level, data rate, dan status jamming; NeoPixel merah saat aktif.
-
-> Catatan: komentar di bagian atas file menyebut BT2 = data rate dan BT3 = jamming, tetapi implementasi sebenarnya adalah BT2 = jamming dan BT3 = data rate. Dokumentasi ini mengikuti kode.
+- Interupsi tombol dipasang sekali di `jammerSetup()` dan dilepas di `jammerStop()` saat keluar mode.
 
 ### 6.4 Proto Kill / Blackout — `blackout.cpp`
 
@@ -286,16 +283,16 @@ Detail perilaku ini dijelaskan pada bagian 9 (Catatan implementasi).
 ### 6.5 BLE Jammer — `blejammer.cpp`
 
 - Tiga radio dengan tiga grup kanal tetap (`{2,5,8,11}`, `{26,29,32,35}`, `{80,83,86,89}`) dikonfigurasi sebagai constant carrier.
-- Mode: `DEACTIVE`, `BLE` (kanal 2/26/80), `Bluetooth` (21 kanal advertising klasik).
-- Tombol **GPIO26** mengganti mode (debounce 500 ms).
+- Mode: `DEACTIVE`, `BLE` (kanal 2/26/80), `Bluetooth` (21 kanal advertising klasik). Radio diinisialisasi untuk **semua mode non-DEACTIVE**.
+- Tombol **GPIO26** mengganti mode (debounce 500 ms). Saat keluar mode, radio di-power down lewat `blejammerStop()`.
 - OLED menampilkan mode aktif serta status tiap radio (`isChipConnected()`).
 
 ### 6.6 BLE Spoofer — `spoofer.cpp`
 
 - Meniru iklan BLE perangkat audio Apple: **17 payload** (AirPods, AirPods Pro/Max/Gen 2/Gen 3/Pro Gen 2, PowerBeats, PowerBeats Pro, Beats Solo Pro, Beats Studio Buds, Beats Flex, Beats X, Beats Solo 3, Beats Studio 3, Beats Studio Pro, Beats Fit Pro, Beats Studio Buds Plus).
 - Payload berupa manufacturer-specific data (Company ID `0x4C00` = Apple) sepanjang 31 byte yang disimpan pada array `DEVICES[17][31]`.
-- Setiap siklus advertising: alamat MAC diacak (`random(256)`, byte pertama di-OR `0xF0` agar bertipe random), service UUID `00003082-0000-1000-9000-00805f9b34fb`, interval min/max `0x20`, lalu `start()` → tunggu 1 detik → `stop()`.
-- Tipe advertising diacak di antara `ADV_TYPE_IND`, `ADV_TYPE_SCAN_IND`, `ADV_TYPE_NONCONN_IND`.
+- Setiap siklus advertising: alamat MAC diacak (`random(256)`, byte pertama di-OR `0xF0` agar bertipe random), service UUID `00003082-0000-1000-9000-00805f9b34fb`, interval min/max `0x20`, lalu `start()` dan advertising dibiarkan aktif sampai pengguna mematikannya atau keluar mode (`spooferStop()`).
+- Tipe advertising mengikuti pilihan pengguna (IND, SCAN, NONCONN) dan benar-benar diterapkan ke `BLEAdvertising`. Tipe *directed* tidak disediakan karena wrapper `BLEAdvertising` tidak mengekspos alamat peer.
 - Kontrol: **GPIO27** = perangkat berikutnya, **GPIO25** = perangkat sebelumnya, **GPIO33** = tipe advertising, **GPIO26** = advertising ON/OFF.
 - OLED menampilkan nama perangkat, adv type, dan status advertising.
 - Daya pancar BLE diset maksimum (`ESP_PWR_LVL_P9`).
@@ -311,16 +308,17 @@ Detail perilaku ini dijelaskan pada bagian 9 (Catatan implementasi).
 - `BLEDevice::getScan()` dengan **active scan**, durasi 5 detik.
 - Selama scan, layar menampilkan animasi "Scanning BLE . . ." dan NeoPixel berkedip putih.
 - Setelah selesai: daftar hingga 5 perangkat (nama dipotong 7 karakter + RSSI), navigasi dengan tombol up/down, tombol select membuka detail (nama, alamat MAC, RSSI), tombol back (`GPIO25`) kembali ke daftar.
+- Hasil scan lama dibersihkan saat masuk (`clearResults()`), detail hanya bisa dibuka jika scan selesai dan ada perangkat, dan `blescanStop()` menghentikan scan serta membebaskan hasil saat keluar.
 
 ### 6.9 WiFi Scan — `wifiscan.cpp`
 
 - `WiFi.mode(WIFI_STA)` + `WiFi.disconnect()`, lalu `WiFi.scanNetworks()`.
-- Daftar hingga 5 jaringan (SSID 7 karakter + RSSI), detail berisi SSID, BSSID, RSSI, dan kanal.
-- Timeout scan 5 detik; navigasi sama dengan BLE Scan.
+- Daftar hingga 5 jaringan (SSID 7 karakter + RSSI), detail berisi SSID, BSSID, RSSI, dan kanal. Detail hanya bisa dibuka jika ada jaringan.
+- Timeout scan 5 detik; navigasi sama dengan BLE Scan. `WiFi.scanDelete()` dipanggil saat masuk dan keluar (`wifiscanStop()`) untuk membebaskan memori hasil scan.
 
 ### 6.10 Setting — `setting.cpp` + `neopixel.cpp`
 
-- Dua opsi: aktif/nonaktif **NeoPixel** dan **kecerahan OLED** (kelipatan 10%, wrap 0–100%).
+- Dua opsi: aktif/nonaktif **NeoPixel** dan **kecerahan OLED** (kelipatan 10%, rentang **10–100%**; tidak pernah 0% agar layar tidak mati permanen).
 - Nilai disimpan ke EEPROM (alamat 0 dan 1) dan langsung diterapkan (`u8g2.setContrast`).
 - `setNeoPixelColour()` menerima nama warna (`"red"`, `"green"`, `"blue"`, `"yellow"`, `"purple"`, `"cyan"`, `"white"`, `"null"`) dengan nilai RGB maksimum 5 (sengaja diredupkan agar tidak menyilaukan dan hemat daya). `flash()` tersedia untuk pola kedip, tetapi tidak dipakai di alur utama.
 
@@ -340,7 +338,7 @@ Ukuran emulasi EEPROM: **512 byte** (`EEPROM.begin(512)`).
 | `0x01` | 1 byte | Kecerahan OLED (0–255) |
 | `0x02`–`0x81` | 128 byte | Riwayat grafik Scanner (buffer `sensorArray`) |
 
-Penulisan harus diakhiri `EEPROM.commit()`. Setting dan Scanner sama-sama menulis ke EEPROM; Scanner menulis setiap 5 detik saat aktif.
+Penulisan harus diakhiri `EEPROM.commit()`. Setting dan Scanner sama-sama menulis ke EEPROM; Scanner hanya menulis saat keluar mode. Nilai kecerahan di bawah 10 otomatis dipulihkan ke 128 saat boot agar perangkat tidak terkunci di layar gelap.
 
 ---
 
@@ -358,25 +356,40 @@ Penulisan harus diakhiri `EEPROM.commit()`. Setting dan Scanner sama-sama menuli
 | BLE/WiFi Scan | naik | detail | turun | kembali | — |
 | Setting | naik | pilih/ubah | turun | — | — |
 
-Cara keluar dari modul: tekan **SELECT (GPIO32)** sekali lagi (lihat bagian 9 mengenai perilaku loop).
+Setiap mode berjalan terus-menerus sampai **SELECT (GPIO32)** ditekan lagi. Saat keluar, firmware memanggil hook pembersih modul (stop radio/scan/advertising, LED mati) sebelum kembali ke menu.
 
 ---
 
-## 9. Catatan Implementasi & Keterbatasan
+## 9. Perbaikan yang Sudah Diterapkan & Keterbatasan
 
-Hal-hal berikut ditemukan saat membaca kode dan penting diketahui sebelum memodifikasi firmware:
+### 9.1 Bug yang sudah diperbaiki
 
-1. **`if (callAbout = true)` adalah assignment, bukan perbandingan.** Ekspresi ini selalu bernilai `true`, sehingga loop "tunggu tombol dilepas" langsung `break`.
-2. **Modul hanya menjalankan satu iterasi `Loop()` per penekanan SELECT.** Alur `while (item_selected == N)` keluar setelah `callAbout` berubah menjadi `false`; `item_selected` sendiri tidak pernah diubah di dalam loop. Akibatnya mode seperti WLAN Jammer dan Spoofer hanya berjalan satu siklus lalu kembali ke menu. Untuk penggunaan berkelanjutan, pola ini perlu diubah (mis. `while (digitalRead(SELECT) == HIGH)` atau state machine tanpa `while`).
-3. **`initializeRadios()` di `blejammer.cpp` memakai `currentMode == !DEACTIVE_MODE`.** `!0` bernilai `1` (= `BLE_MODULE`), sehingga inisialisasi multi-mode hanya berjalan pada mode BLE, bukan pada mode Bluetooth.
-4. **Spoofer membungkus `deviceType` pada 26, padahal payload hanya 17.** Nilai 18–26 akan jatuh ke `default` dan menampilkan AirPods standar.
-5. **Jammer memakai `methode = 1` hardcoded.** Metode 2 dan 3 tidak dapat diakses dari UI.
-6. **Scanner memanggil `EEPROM.begin(128)`** sedangkan entry point memakai 512 byte; menulis di alamat >127 pada konteks lain bisa tidak konsisten.
-7. **Tidak ada indikator baterai / pembacaan ADC** meskipun hardware memiliki TP4056 dan baterai.
-8. **Interupsi tombol** dipasang di dalam `Loop()` (jammer, blackout, blejammer) sehingga `attachInterrupt` dipanggil berulang setiap iterasi. Tidak fatal, tetapi tidak efisien.
-9. **Konsumsi flash besar** (1,48 MB) karena library BLE + WiFi + U8g2 full framebuffer; partition default 1,2 MB tidak cukup (lihat bagian 10).
-10. **NeoPixel dibatasi pada nilai RGB 5** (dari 255) sehingga tampak redup; ini disengaja di kode.
-11. **Tidak ada mekanisme verifikasi RF24 saat boot**; bila modul tidak terpasang, fungsi terkait tetap berjalan tanpa peringatan (kecuali BLE Jammer yang menampilkan `isChipConnected()`).
+| # | Masalah sebelumnya | Perbaikan |
+|---|--------------------|-----------|
+| 1 | Mode hanya berjalan satu iterasi lalu layar ditimpa menu; About/Setting praktis tidak bisa dipakai | Entry point memakai state machine `runMode()`: setup sekali, loop modul berjalan terus sampai SELECT ditekan lagi |
+| 2 | `if (callAbout = true)` (assignment, selalu benar) | Seluruh blok `callAbout` dihapus dan diganti `waitForSelectRelease()` |
+| 3 | `currentMode == !DEACTIVE_MODE` hanya menginisialisasi radio pada mode BLE | Diganti `currentMode != DEACTIVE_MODE`; fungsi `jammer()` yang tidak terpakai dihapus |
+| 4 | BLE Scan membuka detail sebelum hasil tersedia → akses hasil kosong | Detail hanya dibuka jika `scanComplete && getCount() > 0`, dengan guard index di tampilan detail |
+| 5 | Kecerahan 0% tersimpan dan layar mati permanen | Rentang brightness 10–100%; nilai EEPROM < 10 dipulihkan ke 128 saat boot |
+| 6 | Grafik Scanner memakai `map(...,0,64,...)` (identitas) sehingga bar kuat menghilang; kanal 126 tidak valid; EEPROM ditulis tiap 5 detik | Skala 0–100 → 0–63, pemetaan kanal 0–125, simpan sekali saat keluar mode |
+| 7 | Analyzer memakai `drawVLine(x, v-10, 64-v)` dengan argumen salah dan kanal 126/127 | Bar digambar dari dasar layar dengan tinggi hasil `map()`; kanal dipetakan 0–125 |
+| 8 | Spoofer mengabaikan pilihan adv type, membungkus 26 perangkat, label case 6 salah, tombol ter-toggle dua kali, debounce dipakai bersama | Adv type diterapkan, wrap 1–17, label diperbaiki, double-toggle dihapus, debounce per-pin |
+| 9 | Jammer punya metode hardcoded dan komentar BT2/BT3 tertukar | Metode eksperimental dihapus, komentar disesuaikan, interupsi dipasang sekali |
+| 10 | Blackout memanggil `powerDown()` sebelum `begin()`, state ISR tidak `volatile`, debounce antar-tombol saling mengunci | `begin()` sebelum power down, state `volatile`, debounce terpisah per tombol |
+| 11 | BLE Jammer memakai variabel ISR non-volatile dan tidak pernah cleanup | Variabel `volatile`, interupsi dilepas dan radio di-power down lewat `blejammerStop()` |
+| 12 | NeoPixel memanggil `show()` walau `begin()` tidak dijalankan saat fitur dimatikan | `begin()` selalu dipanggil; `setNeoPixelColour()` tidak menggerakkan LED saat fitur nonaktif |
+| 13 | Objek `BLEServer` dibuat ulang setiap masuk mode BLE | Server yang sudah ada dipakai ulang (`BLEDevice::getServer()`) |
+| 14 | Kode mati: `neopixelLoop`, `ScanChannels`, `valuesDisplay`, `address`, `wifi_channels`, `advTypePrevPin`, dll. | Dihapus agar tidak menimbulkan kebingungan dan peringatan kompilasi |
+| 15 | Urutan `esp_wifi_deinit()` sebelum `esp_wifi_disconnect()` | Urutan diperbaiki pada semua modul RF |
+
+### 9.2 Keterbatasan yang masih ada
+
+1. **Tidak ada indikator baterai / pembacaan ADC** meskipun hardware memiliki TP4056 dan baterai.
+2. **Konsumsi flash besar** (±1,48 MB) karena library BLE + WiFi + U8g2 full framebuffer; partition default 1,2 MB tidak cukup (lihat bagian 10).
+3. **NeoPixel dibatasi pada nilai RGB 5** (dari 255) sehingga tampak redup; ini disengaja di kode.
+4. **Tidak ada verifikasi RF24 saat boot**; bila modul tidak terpasang, fungsi terkait tetap berjalan tanpa peringatan (kecuali BLE Jammer yang menampilkan `isChipConnected()`).
+5. **Perpindahan BLE ↔ modul RF** masih memakai `esp_bt_controller_deinit()` mentah. Jika BLE gagal init setelah keluar dari mode RF pada core tertentu, reboot perangkat adalah solusi paling aman.
+6. **Belum ada pengujian di perangkat keras** setelah perubahan ini; validasi hanya dilakukan secara statis (simbol, include, keseimbangan blok, dan alur logika).
 
 ---
 
@@ -391,6 +404,8 @@ Hal-hal berikut ditemukan saat membaca kode dan penting diketahui sebelum memodi
 5. Setelah `Download result: PASS`, tekan tombol reset.
 
 > Firmware prebuilt hanya berisi aplikasi. Bootloader dan tabel partisi harus sudah ada di perangkat (kondisi normal untuk perangkat jadi). Jika perangkat benar-benar kosong, flash juga bootloader (`0x1000`), tabel partisi (`0x8000`), dan `boot_app0.bin` (`0xE000`).
+>
+> **Catatan:** file `3_nRFBox_v2.5.bin` adalah build lama dan **belum memuat perbaikan bug** yang dijelaskan pada bagian 9. Untuk mendapatkan perbaikan, compile dari source (Opsi B).
 
 ### Opsi B — Compile dari source (Arduino IDE)
 
@@ -415,7 +430,7 @@ Hal-hal berikut ditemukan saat membaca kode dan penting diketahui sebelum memodi
 
 | Gejala | Kemungkinan penyebab | Solusi |
 |--------|----------------------|--------|
-| Layar kosong | OLED tidak terdeteksi / kecerahan 0 | Cek I2C di GPIO21/22; masuk Setting dan naikkan brightness; coba `EEPROM` reset |
+| Layar kosong | OLED tidak terdeteksi / kecerahan tersimpan terlalu rendah | Cek I2C di GPIO21/22; reboot (nilai < 10 otomatis menjadi 128); masuk Setting dan naikkan brightness |
 | Port COM tidak muncul | Driver CP210x belum terpasang | Install `silabser.inf` dari folder `x64/`/`x86/` |
 | Upload gagal "not enough space" | Skema partisi default | Pilih **Huge APP (3MB No OTA)** |
 | Upload gagal "MD5/checksum" | Kabel/baud terlalu tinggi | Turunkan upload speed ke 115200, ganti kabel data |
@@ -441,9 +456,9 @@ Hal-hal berikut ditemukan saat membaca kode dan penting diketahui sebelum memodi
 
 ## 13. Ide Pengembangan Lanjutan
 
-1. Ubah pola `while (item_selected == N)` menjadi state machine agar mode berjalan kontinu tanpa menekan tombol berulang.
-2. Perbaiki perbandingan `currentMode == !DEACTIVE_MODE` dan sinkronkan jumlah payload spoofer (17 vs 26).
-3. Tambahkan indikator tegangan baterai (ADC pada pembagi resistor) dan peringatan baterai lemah.
-4. Tambahkan mode "sub-frequency sweep" yang dapat dipilih dari UI, bukan hardcoded.
-5. Kurangi penulisan EEPROM Scanner (mis. hanya saat keluar mode) untuk memperpanjang umur flash.
-6. Simpan setting ke Preferensi NVS (`Preferences.h`) alih-alih EEPROM emulasi manual.
+1. Tambahkan indikator tegangan baterai (ADC pada pembagi resistor) dan peringatan baterai lemah.
+2. Tambahkan mode "sub-frequency sweep" yang dapat dipilih dari UI.
+3. Simpan setting ke Preferensi NVS (`Preferences.h`) alih-alih EEPROM emulasi manual.
+4. Tambahkan mekanisme `BLEDevice::deinit()`/re-init yang aman saat berpindah antara mode BLE dan modul RF.
+5. Tambahkan halaman diagnostik untuk mendeteksi modul nRF24 yang tidak terpasang saat boot.
+6. Uji seluruh mode di perangkat keras dan simpan hasilnya sebagai catatan rilis.

@@ -18,5 +18,6 @@
 
 void blackoutSetup();
 void blackoutLoop();
+void blackoutStop();
 
 #endif

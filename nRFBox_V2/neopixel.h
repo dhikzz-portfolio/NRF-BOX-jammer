@@ -12,7 +12,6 @@
 extern Adafruit_NeoPixel pixels;
 
 void neopixelSetup();
-void neopixelLoop();
 
 void setNeoPixelColour(const std::string& colour);
 void flash(int numberOfFlashes, const std::vector<std::string>& colors, const std::string& finalColour);

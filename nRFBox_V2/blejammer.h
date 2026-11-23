@@ -17,5 +17,6 @@
 
 void blejammerSetup();
 void blejammerLoop();
+void blejammerStop();
 
 #endif
